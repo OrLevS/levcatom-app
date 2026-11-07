@@ -17,7 +17,8 @@ const Home = {
     this.notes = el("article", { class: "card home-notes" });
     this.root = el("div", { class: "home" },
       el("section", { class: "hero" }, this.date, this.clock, this.greet, search),
-      el("div", { class: "home-grid" }, this.tasks, this.cal, this.notes));
+      /* in Chrome's new tab the home screen skips the notes card */
+      el("div", { class: "home-grid" + (IS_EXT ? " two" : "") }, this.tasks, this.cal, IS_EXT ? "" : this.notes));
     root.replaceChildren(this.root);
     this.tick();
     this.render();
@@ -33,7 +34,7 @@ const Home = {
   },
   render() {
     if (!this.root?.isConnected) return;
-    this.renderCal(); this.renderTasks(); this.renderNotes();
+    this.renderCal(); this.renderTasks(); if (!IS_EXT) this.renderNotes();
   },
   renderCal() {
     const d = this.day, now = new Date();
