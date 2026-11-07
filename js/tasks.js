@@ -68,7 +68,19 @@ const Tasks = {
     const d = BASE_DEFAULTS[b] || { groupBy: "none", sortBy: "due" };
     return (this.ui.opts[b] ||= { groupBy: d.groupBy, sortBy: d.sortBy, tagFilter: [], tagMode: "any", showDone: !!d.showDone, layout: "list" });
   },
-  setOpt(k, v) { this.opts()[k] = v; this.saveUi(); this.render(); },
+  setOpt(k, v) { const o = this.opts(); o[k] = v; if (k === "groupBy") o.groupChosen = true; this.saveUi(); this.render(); },
+  /* the base project, when looking at a project that has sub-projects */
+  parentBase() {
+    const b = this.ui.base;
+    if (!b.startsWith("p:") || this.ui.q) return null;
+    const p = DB.get("projects", b.slice(2));
+    return p && this.projKids(p.id).length ? p : null;
+  },
+  /* a parent project is grouped by sub-project unless a grouping was picked by hand */
+  groupBy() {
+    const o = this.opts();
+    return !o.groupChosen && this.parentBase() ? "project" : o.groupBy;
+  },
 
   /* ---------- data helpers ---------- */
   projects() { return DB.all("projects").sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "he")); },
@@ -165,7 +177,17 @@ const Tasks = {
     return list.filter(t => !t.parent_id || !ids.has(t.parent_id));
   },
   groups(list) {
-    const by = this.opts().groupBy;
+    const by = this.groupBy();
+    const pb = this.parentBase();
+    if (by === "project" && pb) {
+      /* inside a parent project: one group per sub-project, empty ones too (so tasks can be dropped or added there) */
+      const desc = this.projDesc(pb.id);
+      const tree = this.projTree().filter(({ p }) => desc.has(p.id));
+      const rel = id => { const full = this.projPath(id), pre = this.projPath(pb.id) + " › "; return full.startsWith(pre) ? full.slice(pre.length) : full; };
+      const gs = tree.map(({ p }) => ({ key: "p:" + p.id, title: p.id === pb.id ? `${pb.name} (כללי)` : rel(p.id), color: p.color, drop: { project_id: p.id }, items: [] }));
+      for (const t of list) gs.find(g => g.key === "p:" + t.project_id)?.items.push(t);
+      return gs.filter(g => g.items.length || g.key !== "p:" + pb.id);
+    }
     if (by === "project") {
       const gs = [{ key: "p:", title: "תיבה", color: "beige", drop: { project_id: null }, items: [] },
         ...this.projTree().map(({ p }) => ({ key: "p:" + p.id, title: this.projPath(p.id), color: p.color, drop: { project_id: p.id }, items: [] }))];
@@ -300,7 +322,7 @@ const Tasks = {
         el("div", { class: "seg" },
           el("button", { class: o.layout !== "board" ? "on" : "", onclick: () => this.setOpt("layout", "list") }, icon("list", "tiny"), "רשימה"),
           el("button", { class: o.layout === "board" ? "on" : "", onclick: () => this.setOpt("layout", "board") }, icon("grid", "tiny"), "לוח")),
-        pick("קיבוץ:", o.groupBy, GROUPS, "groupBy"),
+        pick("קיבוץ:", this.groupBy(), GROUPS, "groupBy"),
         this.ui.base !== "done" ? pick("מיון:", o.sortBy, SORTS, "sortBy") : "",
         this.ui.base !== "done" ? el("button", { class: "tb" + (o.showDone ? " on" : ""), onclick: () => this.setOpt("showDone", !o.showDone) }, icon("check", "tiny"), "גם שהושלמו") : "",
         el("button", { class: "tb", onclick: () => this.saveView() }, icon("save", "tiny"), this.ui.view ? "עדכון התצוגה" : "שמירה כתצוגה")),
@@ -322,10 +344,27 @@ const Tasks = {
     const content = el("div", { class: "groups" + (o.layout === "board" ? " board" : "") },
       groups.map(g => el("section", { class: "grp", "data-key": g.key, style: { "--c": cvar(g.color || "teal") } },
         g.title ? el("h3", { class: "grp-h", dir: "auto" }, el("span", { class: "dot" }), g.title, el("span", { class: "cnt" }, g.items.length)) : "",
-        el("ul", { class: "tlist" }, g.items.flatMap(t => this.rowWithSubs(t, g))))));
-    const empty = !list.length ? el("div", { class: "empty" },
+        el("ul", { class: "tlist" }, g.items.length ? g.items.flatMap(t => this.rowWithSubs(t, g)) : el("li", { class: "grp-empty" }, "אין משימות")),
+        o.layout === "board" && this.ui.base !== "done" ? this.colAdd(g) : "")));
+    const empty = !list.length && !this.parentBase() ? el("div", { class: "empty" },
       el("p", {}, this.ui.q ? "לא נמצאו משימות." : this.ui.base === "today" ? "אין משימות להיום. יום נקי!" : "אין כאן משימות עדיין.")) : "";
-    this.body.replaceChildren(add, empty, list.length ? content : "");
+    this.body.replaceChildren(add, empty, list.length || this.parentBase() ? content : "");
+  },
+  /* quick add at the bottom of a board column: the new task lands in that column */
+  colAdd(g) {
+    const inp = el("input", { class: "inp col-add", placeholder: "＋ משימה", dir: "auto", autocomplete: "off" });
+    inp.addEventListener("keydown", e => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      const ctx = this.context();
+      if (g.drop && "project_id" in g.drop) ctx.project_id = g.drop.project_id;
+      if (g.tag) ctx.tags = [...new Set([...(ctx.tags || []), g.tag])];
+      const t = this.quickAdd(inp.value, ctx);
+      if (!t) return;
+      if (g.drop) { const { project_id, ...rest } = g.drop; if (Object.keys(rest).length) DB.patch("tasks", t.id, rest, { silent: true }); }
+      this.render();
+      $(`.grp[data-key="${CSS.escape(g.key)}"] .col-add`, this.body)?.focus();
+    });
+    return inp;
   },
   addBox() {
     const ctx = this.context();
@@ -364,7 +403,7 @@ const Tasks = {
     const proj = t.project_id && DB.get("projects", t.project_id);
     const meta = [
       t.due_date ? el("span", { class: "m-date" + (late ? " late" : t.due_date === todayKey() ? " today" : "") }, icon("calendar", "tiny"), dayWord(fromKey(t.due_date)), t.due_time ? " " + t.due_time : "") : "",
-      proj && this.opts().groupBy !== "project" ? el("span", { class: "m-proj", style: { "--c": cvar(proj.color) } }, el("span", { class: "dot" }), proj.name) : "",
+      proj && this.groupBy() !== "project" ? el("span", { class: "m-proj", style: { "--c": cvar(proj.color) } }, el("span", { class: "dot" }), proj.name) : "",
       ...(t.tags || []).filter(n => n !== g?.tag).map(n => el("span", { class: "tagchip sm", style: { "--c": cvar(this.tagColor(n)) } }, "#" + n)),
       subs.length ? el("span", { class: "m-subs" + (subsDone === subs.length ? " all" : "") }, icon("checkbox", "tiny"), `${subsDone}/${subs.length}`) : "",
       parent && !nested ? el("span", { class: "m-parent", dir: "auto" }, "↳ " + (parent.title || "")) : "",

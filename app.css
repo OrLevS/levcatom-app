@@ -594,3 +594,7 @@ dialog.dlg[open] { animation: dlgIn .16s ease-out; }
 .parent-link { display: inline-flex; gap: 4px; font-size: 13px; color: var(--ink-soft); padding: 2px 8px; border-radius: 8px; margin-bottom: 6px; justify-self: start; }
 .parent-link:hover { background: var(--hover); color: var(--ink); }
 .parent-link b { font-weight: 400; color: var(--teal); }
+
+.grp-empty { list-style: none; font-size: 13px; color: var(--ink-soft); padding: 10px 12px; border: 1.5px dashed var(--line); border-radius: 14px; text-align: center; }
+.col-add { margin-top: 6px; border-style: dashed; background: transparent; padding: 7px 12px; font-size: 14px; }
+.col-add:focus { border-style: solid; background: #fff; }
