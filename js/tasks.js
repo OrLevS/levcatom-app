@@ -306,61 +306,88 @@ const Tasks = {
     this.ui.closedProj = [...s]; this.saveUi(); this.renderSide();
   },
   renderBar() {
-    const o = this.opts();
+    const o = this.opts(), done = this.ui.base === "done";
+    const tags = this.tagList();
+    const nFilters = (o.priFilter?.length || 0) + (o.tagFilter?.length || 0);
+    const searching = this.ui.searchOpen || this.ui.q;
     const search = el("input", { class: "inp search-in", placeholder: "חיפוש במשימות", value: this.ui.q, dir: "auto" });
     search.addEventListener("input", debounce(() => { this.ui.q = search.value; this.renderBody(); $(".bar-title", this.bar).textContent = this.baseTitle(); }, 200));
-    const pick = (label, cur, map, key) => el("button", { class: "tb", onclick: e => UI.menu(e.currentTarget, Object.entries(map).map(([k, l]) => ({ label: (k === cur ? "✓ " : "") + l, fn: () => this.setOpt(key, k) }))) },
-      el("span", { class: "muted" }, label), map[cur], icon("chevD", "tiny"));
-    const tags = this.tagList();
+    search.addEventListener("keydown", e => { if (e.key === "Escape") { this.ui.q = ""; this.ui.searchOpen = false; this.render(); } });
+    search.addEventListener("blur", () => { if (!search.value) { this.ui.searchOpen = false; setTimeout(() => this.renderBar(), 120); } });
+    const check = on => (on ? "✓ " : "  ");
+    const viewMenu = btn => UI.menu(btn, [
+      { heading: "קיבוץ לפי" },
+      ...Object.entries(GROUPS).map(([k, l]) => ({ label: check(k === this.groupBy()) + l, fn: () => this.setOpt("groupBy", k) })),
+      ...(done ? [] : [{ sep: true }, { heading: "מיון לפי" },
+        ...Object.entries(SORTS).map(([k, l]) => ({ label: check(k === o.sortBy) + l, fn: () => this.setOpt("sortBy", k) })),
+        { sep: true },
+        { label: check(o.showDone) + "להציג גם משימות שהושלמו", fn: () => this.setOpt("showDone", !o.showDone) }]),
+      { sep: true },
+      { label: this.ui.view ? "עדכון התצוגה השמורה" : "שמירה כתצוגה קבועה", icon: "save", fn: () => this.saveView() },
+    ]);
     this.bar.replaceChildren(
       el("div", { class: "bar-line" },
         el("button", { class: "icon-btn only-mobile", title: "רשימות", onclick: () => this.side.classList.toggle("open") }, icon("menu")),
         el("h1", { class: "bar-title", dir: "auto" }, this.baseTitle()),
         this.ui.base.startsWith("p:") && !this.ui.q && DB.get("projects", this.ui.base.slice(2))
           ? el("button", { class: "icon-btn", title: "אפשרויות הפרויקט", onclick: e => this.projectMenu(e.currentTarget, DB.get("projects", this.ui.base.slice(2))) }, icon("dots")) : "",
-        search),
+        el("span", { class: "grow" }),
+        searching ? search : el("button", { class: "icon-btn", title: "חיפוש", onclick: () => { this.ui.searchOpen = true; this.renderBar(); $(".search-in", this.bar)?.focus(); } }, icon("search")),
+        !done ? el("button", { class: "btn add-task", onclick: () => this.openAdd() }, icon("plus"), el("span", {}, "משימה")) : ""),
       el("div", { class: "toolbar" },
         el("div", { class: "seg" },
-          el("button", { class: o.layout !== "board" ? "on" : "", onclick: () => this.setOpt("layout", "list") }, icon("list", "tiny"), "רשימה"),
-          el("button", { class: o.layout === "board" ? "on" : "", onclick: () => this.setOpt("layout", "board") }, icon("grid", "tiny"), "לוח")),
-        pick("קיבוץ:", this.groupBy(), GROUPS, "groupBy"),
-        this.ui.base !== "done" ? pick("מיון:", o.sortBy, SORTS, "sortBy") : "",
-        this.ui.base !== "done" ? el("button", { class: "tb" + (o.showDone ? " on" : ""), onclick: () => this.setOpt("showDone", !o.showDone) }, icon("check", "tiny"), "גם שהושלמו") : "",
-        el("button", { class: "tb", onclick: () => this.saveView() }, icon("save", "tiny"), this.ui.view ? "עדכון התצוגה" : "שמירה כתצוגה")),
-      el("div", { class: "tagbar" },
-        el("span", { class: "muted" }, "עדיפות:"),
-        [1, 2, 3, 4].map(p => el("button", {
-          class: "tagchip" + (o.priFilter?.includes(p) ? " on" : ""), style: { "--c": cvar(PRI[p] || "navy") },
-          onclick: () => { const s = new Set(o.priFilter || []); s.has(p) ? s.delete(p) : s.add(p); this.setOpt("priFilter", [...s]); },
-        }, icon("flag", "tiny"), PRI_LABEL[p])),
-        o.priFilter?.length ? el("button", { class: "tb", onclick: () => this.setOpt("priFilter", []) }, icon("x", "tiny"), "ניקוי") : ""),
-      tags.length ? el("div", { class: "tagbar" },
-        el("span", { class: "muted" }, "תגיות:"),
-        tags.map(n => el("button", {
-          class: "tagchip" + (o.tagFilter?.includes(n) ? " on" : ""), style: { "--c": cvar(this.tagColor(n)) }, dir: "auto",
-          onclick: () => { const s = new Set(o.tagFilter || []); s.has(n) ? s.delete(n) : s.add(n); this.setOpt("tagFilter", [...s]); },
-        }, "#" + n)),
-        o.tagFilter?.length > 1 ? el("button", { class: "tb", onclick: () => this.setOpt("tagMode", o.tagMode === "all" ? "any" : "all") }, o.tagMode === "all" ? "כל התגיות יחד" : "לפחות אחת") : "",
-        o.tagFilter?.length ? el("button", { class: "tb", onclick: () => this.setOpt("tagFilter", []) }, icon("x", "tiny"), "ניקוי") : "") : "");
+          el("button", { class: o.layout !== "board" ? "on" : "", title: "רשימה", onclick: () => this.setOpt("layout", "list") }, icon("list", "tiny"), "רשימה"),
+          el("button", { class: o.layout === "board" ? "on" : "", title: "לוח", onclick: () => this.setOpt("layout", "board") }, icon("grid", "tiny"), "לוח")),
+        el("button", { class: "tb", onclick: e => viewMenu(e.currentTarget) }, icon("layers", "tiny"), "תצוגה", el("span", { class: "muted" }, "· " + GROUPS[this.groupBy()]), icon("chevD", "tiny")),
+        el("button", { class: "tb" + (this.ui.showFilters || nFilters ? " on-soft" : ""), onclick: () => { this.ui.showFilters = !this.ui.showFilters; this.renderBar(); } },
+          icon("filter", "tiny"), "סינון", nFilters ? el("span", { class: "badge" }, nFilters) : "", icon("chevD", "tiny")),
+        nFilters ? el("button", { class: "linkish", onclick: () => { o.priFilter = []; o.tagFilter = []; this.saveUi(); this.render(); } }, "ניקוי הסינון") : ""),
+      this.ui.showFilters ? el("div", { class: "filters" },
+        el("div", { class: "tagbar" },
+          el("span", { class: "muted lbl" }, "עדיפות"),
+          [1, 2, 3, 4].map(p => el("button", {
+            class: "tagchip" + (o.priFilter?.includes(p) ? " on" : ""), style: { "--c": cvar(PRI[p] || "navy") },
+            onclick: () => { const s = new Set(o.priFilter || []); s.has(p) ? s.delete(p) : s.add(p); this.setOpt("priFilter", [...s]); },
+          }, icon("flag", "tiny"), PRI_LABEL[p]))),
+        tags.length ? el("div", { class: "tagbar" },
+          el("span", { class: "muted lbl" }, "תגיות"),
+          tags.map(n => el("button", {
+            class: "tagchip" + (o.tagFilter?.includes(n) ? " on" : ""), style: { "--c": cvar(this.tagColor(n)) }, dir: "auto",
+            onclick: () => { const s = new Set(o.tagFilter || []); s.has(n) ? s.delete(n) : s.add(n); this.setOpt("tagFilter", [...s]); },
+          }, "#" + n)),
+          o.tagFilter?.length > 1 ? el("button", { class: "tb", onclick: () => this.setOpt("tagMode", o.tagMode === "all" ? "any" : "all") }, o.tagMode === "all" ? "כל התגיות יחד" : "לפחות אחת") : "") : "") : "");
+  },
+  openAdd() {
+    this.ui.adding = true;
+    this.renderBody();
+    $(".add-in", this.body)?.focus();
   },
 
   renderBody() {
     const o = this.opts();
     const list = this.filtered();
     const groups = this.groups(list);
-    const add = this.ui.base === "done" ? "" : this.addBox();
+    const add = this.ui.base === "done" || !this.ui.adding ? "" : this.addBox();
     const content = el("div", { class: "groups" + (o.layout === "board" ? " board" : "") },
       groups.map(g => el("section", { class: "grp", "data-key": g.key, style: { "--c": cvar(g.color || "teal") } },
-        g.title ? el("h3", { class: "grp-h", dir: "auto" }, el("span", { class: "dot" }), g.title, el("span", { class: "cnt" }, g.items.length)) : "",
+        g.title ? el("h3", { class: "grp-h" }, el("span", { class: "dot" }), el("span", { dir: "auto" }, g.title), el("span", { class: "cnt" }, g.items.length)) : "",
         el("ul", { class: "tlist" }, g.items.length ? g.items.flatMap(t => this.rowWithSubs(t, g)) : el("li", { class: "grp-empty" }, "אין משימות")),
         o.layout === "board" && this.ui.base !== "done" ? this.colAdd(g) : "")));
     const empty = !list.length && !this.parentBase() ? el("div", { class: "empty" },
-      el("p", {}, this.ui.q ? "לא נמצאו משימות." : this.ui.base === "today" ? "אין משימות להיום. יום נקי!" : "אין כאן משימות עדיין.")) : "";
+      el("p", {}, this.ui.q ? "לא נמצאו משימות." : this.ui.base === "today" ? "אין משימות להיום. יום נקי!" : "אין כאן משימות עדיין."),
+      !this.ui.q && this.ui.base !== "done" && !this.ui.adding ? el("button", { class: "btn", onclick: () => this.openAdd() }, icon("plus"), "משימה חדשה") : "") : "";
     this.body.replaceChildren(add, empty, list.length || this.parentBase() ? content : "");
   },
   /* quick add at the bottom of a board column: the new task lands in that column */
   colAdd(g) {
-    const inp = el("input", { class: "inp col-add", placeholder: "＋ משימה", dir: "auto", autocomplete: "off" });
+    const btn = el("button", { class: "col-add-btn" }, icon("plus", "tiny"), "משימה");
+    btn.addEventListener("click", () => { const i = this.colInput(g); btn.replaceWith(i); i.focus(); });
+    return btn;
+  },
+  colInput(g) {
+    const inp = el("input", { class: "inp col-add", placeholder: "שם המשימה ואז Enter", dir: "auto", autocomplete: "off" });
+    inp.addEventListener("blur", () => { if (!inp.value.trim()) setTimeout(() => inp.isConnected && inp.replaceWith(this.colAdd(g)), 100); });
+    inp.addEventListener("keydown", e => { if (e.key === "Escape") inp.blur(); });
     inp.addEventListener("keydown", e => {
       if (e.key !== "Enter" || e.isComposing) return;
       const ctx = this.context();
@@ -370,7 +397,7 @@ const Tasks = {
       if (!t) return;
       if (g.drop) { const { project_id, ...rest } = g.drop; if (Object.keys(rest).length) DB.patch("tasks", t.id, rest, { silent: true }); }
       this.render();
-      $(`.grp[data-key="${CSS.escape(g.key)}"] .col-add`, this.body)?.focus();
+      $(`.grp[data-key="${CSS.escape(g.key)}"] .col-add-btn`, this.body)?.click();
     });
     return inp;
   },
@@ -386,11 +413,16 @@ const Tasks = {
         ...p.tags.map(n => el("span", { class: "pchip", style: { "--c": cvar(this.tagColor(n)) } }, "#" + n)),
         p.priority ? el("span", { class: "pchip", style: { "--c": cvar(PRI[p.priority] || "beige") } }, icon("flag", "tiny"), PRI_LABEL[p.priority]) : "");
     });
+    const close = () => { this.ui.adding = false; this.renderBody(); };
     inp.addEventListener("keydown", e => {
+      if (e.key === "Escape") return close();
       if (e.key !== "Enter" || e.isComposing) return;
       if (this.quickAdd(inp.value, ctx)) { inp.value = ""; prev.replaceChildren(); this.render(); $(".add-in", this.body)?.focus(); }
     });
-    return el("div", { class: "addbox" }, el("span", { class: "add-ic" }, icon("plus")), inp, prev);
+    inp.addEventListener("blur", () => { if (!inp.value.trim()) setTimeout(() => { if (this.ui.adding && !$(".add-in", this.body)?.matches(":focus")) close(); }, 150); });
+    return el("div", { class: "addbox" }, el("span", { class: "add-ic" }, icon("plus")), inp,
+      el("button", { class: "icon-btn sm add-x", title: "סגירה", onmousedown: e => e.preventDefault(), onclick: close }, icon("x")),
+      prev, el("p", { class: "add-hint" }, "Enter להוספה · ‎#תגית ‎@פרויקט ‎!1 · מחר, ביום שלישי, 14:00"));
   },
   rowWithSubs(t, g) {
     const out = [this.row(t, g)];

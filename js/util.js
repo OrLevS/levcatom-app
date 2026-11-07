@@ -174,6 +174,7 @@ const UI = {
           onclick: () => { close(); it.fn(c); },
         }))));
       } else if (it.sep) pop.append(el("hr"));
+      else if (it.heading) pop.append(el("div", { class: "pop-h" }, it.heading));
       else pop.append(el("button", { class: "pop-item" + (it.danger ? " danger" : ""), onclick: () => { close(); it.fn(); } },
         it.icon ? icon(it.icon) : "", el("span", {}, it.label)));
     }
