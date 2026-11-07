@@ -13,9 +13,9 @@ const TABLES = ["calendars", "events", "projects", "tags", "tasks", "views", "no
 const DEFAULTS = {
   calendars: () => ({ name: "", color: "teal", visible: true, sort: Date.now() }),
   events: () => ({ calendar_id: null, title: "", notes: "", location: "", start_at: null, end_at: null, all_day: false, rrule: null, exdates: [] }),
-  projects: () => ({ name: "", color: "coral", sort: Date.now() }),
+  projects: () => ({ name: "", color: "coral", sort: Date.now(), parent_id: null }),
   tags: () => ({ name: "", color: "sand" }),
-  tasks: () => ({ project_id: null, title: "", notes: "", tags: [], due_date: null, due_time: null, priority: 4, done: false, done_at: null, sort: Date.now(), created_at: new Date().toISOString() }),
+  tasks: () => ({ project_id: null, parent_id: null, title: "", notes: "", tags: [], due_date: null, due_time: null, priority: 4, done: false, done_at: null, sort: Date.now(), created_at: new Date().toISOString() }),
   views: () => ({ name: "", config: {}, sort: Date.now() }),
   notes: () => ({ title: "", color: "gold", x: 40, y: 40, w: 250, h: 240, z: 1, items: [] }),
 };

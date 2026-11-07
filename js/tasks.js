@@ -72,6 +72,31 @@ const Tasks = {
 
   /* ---------- data helpers ---------- */
   projects() { return DB.all("projects").sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "he")); },
+  /* projects as a tree in display order, each with its depth */
+  projTree() {
+    const all = this.projects(), ids = new Set(all.map(p => p.id)), out = [];
+    const parentOf = p => (p.parent_id && ids.has(p.parent_id) ? p.parent_id : null);
+    const walk = (pid, depth) => {
+      for (const p of all.filter(p => parentOf(p) === pid)) { out.push({ p, depth }); if (depth < 6) walk(p.id, depth + 1); }
+    };
+    walk(null, 0);
+    return out;
+  },
+  projKids(id) { return this.projects().filter(p => p.parent_id === id); },
+  projDesc(id) {
+    const s = new Set([id]);
+    for (let grew = true; grew;) { grew = false; for (const p of DB.all("projects")) if (p.parent_id && s.has(p.parent_id) && !s.has(p.id)) { s.add(p.id); grew = true; } }
+    return s;
+  },
+  projPath(id) {
+    const names = [];
+    for (let p = DB.get("projects", id), i = 0; p && i < 8; p = p.parent_id && DB.get("projects", p.parent_id), i++) names.unshift(p.name);
+    return names.join(" › ");
+  },
+  subtasks(id) {
+    return DB.all("tasks").filter(t => t.parent_id === id)
+      .sort((a, b) => (a.sort || 0) - (b.sort || 0) || (a.created_at || "").localeCompare(b.created_at || ""));
+  },
   tagList() {
     const names = new Set(DB.all("tags").map(t => t.name));
     for (const t of DB.all("tasks")) for (const n of t.tags || []) names.add(n);
@@ -83,7 +108,10 @@ const Tasks = {
     if (!this.tagRow(name)) DB.create("tags", { name, color: nextColor(DB.all("tags").map(t => t.color)) }, { silent: true });
   },
   ensureProject(name) {
-    const p = DB.all("projects").find(p => p.name.toLowerCase() === name.toLowerCase());
+    /* "@משוואות_לסוגיהן" matches the project "משוואות לסוגיהן" */
+    const norm = x => x.replace(/_/g, " ").trim().toLowerCase();
+    name = name.replace(/_/g, " ").trim();
+    const p = DB.all("projects").find(p => norm(p.name) === norm(name));
     return p || DB.create("projects", { name, color: nextColor(DB.all("projects").map(p => p.color)) }, { silent: true });
   },
   quickAdd(text, ctx = {}) {
@@ -97,7 +125,11 @@ const Tasks = {
   },
   toggle(t, li) {
     const done = !t.done;
-    const go = () => DB.patch("tasks", t.id, { done, done_at: done ? new Date().toISOString() : null });
+    const go = () => {
+      const at = done ? new Date().toISOString() : null;
+      if (done) for (const s of this.subtasks(t.id)) if (!s.done) DB.patch("tasks", s.id, { done: true, done_at: at }, { silent: true });
+      DB.patch("tasks", t.id, { done, done_at: at });
+    };
     if (li && done) { li.classList.add("completing"); setTimeout(go, 380); } else go();
     if (done) UI.toast("המשימה הושלמה", { label: "ביטול", fn: () => DB.patch("tasks", t.id, { done: false, done_at: null }) });
   },
@@ -117,7 +149,7 @@ const Tasks = {
     if (base === "upcoming") return t.due_date && t.due_date <= dkey(addDays(new Date(), 7));
     if (base === "inbox") return !t.project_id;
     if (base === "done") return t.done;
-    if (base.startsWith("p:")) return t.project_id === base.slice(2);
+    if (base.startsWith("p:")) return this.projDesc(base.slice(2)).has(t.project_id);
     if (base.startsWith("t:")) return (t.tags || []).includes(base.slice(2));
     return true;
   },
@@ -127,15 +159,18 @@ const Tasks = {
     if (q) list = list.filter(t => (t.title + " " + t.notes + " " + (t.tags || []).join(" ")).toLowerCase().includes(q));
     if (base !== "done" && !o.showDone) list = list.filter(t => !t.done);
     if (o.tagFilter?.length) list = list.filter(t => o.tagMode === "all" ? o.tagFilter.every(n => t.tags?.includes(n)) : o.tagFilter.some(n => t.tags?.includes(n)));
-    return list.sort(base === "done" ? this.sortFn("doneAt") : this.sortFn(o.sortBy));
+    list.sort(base === "done" ? this.sortFn("doneAt") : this.sortFn(o.sortBy));
+    /* subtasks whose parent is listed are drawn under the parent instead */
+    const ids = new Set(list.map(t => t.id));
+    return list.filter(t => !t.parent_id || !ids.has(t.parent_id));
   },
   groups(list) {
     const by = this.opts().groupBy;
     if (by === "project") {
       const gs = [{ key: "p:", title: "תיבה", color: "beige", drop: { project_id: null }, items: [] },
-        ...this.projects().map(p => ({ key: "p:" + p.id, title: p.name, color: p.color, drop: { project_id: p.id }, items: [] }))];
+        ...this.projTree().map(({ p }) => ({ key: "p:" + p.id, title: this.projPath(p.id), color: p.color, drop: { project_id: p.id }, items: [] }))];
       for (const t of list) (gs.find(g => g.key === "p:" + (t.project_id || "")) || gs[0]).items.push(t);
-      return gs.filter(g => g.items.length || g.key !== "p:");
+      return gs.filter(g => g.items.length);
     }
     if (by === "tag") {
       const gs = this.tagList().map(n => ({ key: "t:" + n, tag: n, title: "#" + n, color: this.tagColor(n), items: list.filter(t => t.tags?.includes(n)) }));
@@ -163,7 +198,7 @@ const Tasks = {
     const b = this.ui.base;
     if (this.ui.q) return `חיפוש: ${this.ui.q}`;
     if (this.ui.view) return DB.get("views", this.ui.view)?.name || "תצוגה";
-    if (b.startsWith("p:")) return DB.get("projects", b.slice(2))?.name || "פרויקט";
+    if (b.startsWith("p:")) return this.projPath(b.slice(2)) || "פרויקט";
     if (b.startsWith("t:")) return "#" + b.slice(2);
     return { today: "היום", upcoming: "7 הימים הקרובים", all: "כל המשימות", inbox: "תיבה", done: "הושלמו" }[b];
   },
@@ -217,9 +252,13 @@ const Tasks = {
         item("done", "הושלמו", icon("check"), "")),
       el("div", { class: "side-h" }, el("span", {}, "פרויקטים"),
         el("button", { class: "icon-btn sm", title: "פרויקט חדש", onclick: () => this.addProject() }, icon("plus"))),
-      el("nav", { class: "side-group" }, this.projects().map(p => el("div", { class: "side-row", style: { "--c": cvar(p.color) } },
-        item("p:" + p.id, p.name, el("span", { class: "dot" }), count(t => t.project_id === p.id)),
-        el("button", { class: "icon-btn sm more", onclick: e => this.projectMenu(e.currentTarget, p) }, icon("dots"))))),
+      el("nav", { class: "side-group" }, this.projTree().filter(({ p }) => this.projShown(p)).map(({ p, depth }) => {
+        const kids = this.projKids(p.id).length, desc = this.projDesc(p.id), closed = this.ui.closedProj?.includes(p.id);
+        return el("div", { class: "side-row proj-row", style: { "--c": cvar(p.color), paddingInlineStart: depth * 16 + "px" } },
+          kids ? el("button", { class: "caret" + (closed ? " closed" : ""), title: closed ? "פתיחה" : "קיפול", onclick: () => this.toggleProj(p.id) }, icon("chevD", "tiny")) : el("span", { class: "caret-sp" }),
+          item("p:" + p.id, p.name, el("span", { class: "dot" }), count(t => desc.has(t.project_id))),
+          el("button", { class: "icon-btn sm more", title: "אפשרויות", onclick: e => this.projectMenu(e.currentTarget, p) }, icon("dots")));
+      })),
       el("div", { class: "side-h" }, el("span", {}, "תגיות"),
         el("button", { class: "icon-btn sm", title: "תגית חדשה", onclick: () => this.addTag() }, icon("plus"))),
       el("nav", { class: "side-group" }, this.tagList().map(n => el("div", { class: "side-row", style: { "--c": cvar(this.tagColor(n)) } },
@@ -233,6 +272,16 @@ const Tasks = {
     );
   },
 
+  projShown(p) {
+    const closed = this.ui.closedProj || [];
+    for (let q = p.parent_id && DB.get("projects", p.parent_id), i = 0; q && i < 8; q = q.parent_id && DB.get("projects", q.parent_id), i++) if (closed.includes(q.id)) return false;
+    return true;
+  },
+  toggleProj(id) {
+    const s = new Set(this.ui.closedProj || []);
+    s.has(id) ? s.delete(id) : s.add(id);
+    this.ui.closedProj = [...s]; this.saveUi(); this.renderSide();
+  },
   renderBar() {
     const o = this.opts();
     const search = el("input", { class: "inp search-in", placeholder: "חיפוש במשימות", value: this.ui.q, dir: "auto" });
@@ -244,6 +293,8 @@ const Tasks = {
       el("div", { class: "bar-line" },
         el("button", { class: "icon-btn only-mobile", title: "רשימות", onclick: () => this.side.classList.toggle("open") }, icon("menu")),
         el("h1", { class: "bar-title", dir: "auto" }, this.baseTitle()),
+        this.ui.base.startsWith("p:") && !this.ui.q && DB.get("projects", this.ui.base.slice(2))
+          ? el("button", { class: "icon-btn", title: "אפשרויות הפרויקט", onclick: e => this.projectMenu(e.currentTarget, DB.get("projects", this.ui.base.slice(2))) }, icon("dots")) : "",
         search),
       el("div", { class: "toolbar" },
         el("div", { class: "seg" },
@@ -271,7 +322,7 @@ const Tasks = {
     const content = el("div", { class: "groups" + (o.layout === "board" ? " board" : "") },
       groups.map(g => el("section", { class: "grp", "data-key": g.key, style: { "--c": cvar(g.color || "teal") } },
         g.title ? el("h3", { class: "grp-h", dir: "auto" }, el("span", { class: "dot" }), g.title, el("span", { class: "cnt" }, g.items.length)) : "",
-        el("ul", { class: "tlist" }, g.items.map(t => this.row(t, g))))));
+        el("ul", { class: "tlist" }, g.items.flatMap(t => this.rowWithSubs(t, g))))));
     const empty = !list.length ? el("div", { class: "empty" },
       el("p", {}, this.ui.q ? "לא נמצאו משימות." : this.ui.base === "today" ? "אין משימות להיום. יום נקי!" : "אין כאן משימות עדיין.")) : "";
     this.body.replaceChildren(add, empty, list.length ? content : "");
@@ -294,16 +345,34 @@ const Tasks = {
     });
     return el("div", { class: "addbox" }, el("span", { class: "add-ic" }, icon("plus")), inp, prev);
   },
-  row(t, g) {
+  rowWithSubs(t, g) {
+    const out = [this.row(t, g)];
+    if (this.ui.collapsed?.includes(t.id)) return out;
+    const showDone = this.opts().showDone || this.ui.base === "done";
+    for (const s of this.subtasks(t.id)) if (showDone || !s.done) out.push(this.row(s, g, { nested: true }));
+    return out;
+  },
+  toggleSubs(id) {
+    const s = new Set(this.ui.collapsed || []);
+    s.has(id) ? s.delete(id) : s.add(id);
+    this.ui.collapsed = [...s]; this.saveUi(); this.renderBody();
+  },
+  row(t, g, { nested = false } = {}) {
+    const subs = this.subtasks(t.id), subsDone = subs.filter(s => s.done).length;
+    const parent = t.parent_id && DB.get("tasks", t.parent_id);
     const late = t.due_date && t.due_date < todayKey() && !t.done;
     const proj = t.project_id && DB.get("projects", t.project_id);
     const meta = [
       t.due_date ? el("span", { class: "m-date" + (late ? " late" : t.due_date === todayKey() ? " today" : "") }, icon("calendar", "tiny"), dayWord(fromKey(t.due_date)), t.due_time ? " " + t.due_time : "") : "",
       proj && this.opts().groupBy !== "project" ? el("span", { class: "m-proj", style: { "--c": cvar(proj.color) } }, el("span", { class: "dot" }), proj.name) : "",
       ...(t.tags || []).filter(n => n !== g?.tag).map(n => el("span", { class: "tagchip sm", style: { "--c": cvar(this.tagColor(n)) } }, "#" + n)),
+      subs.length ? el("span", { class: "m-subs" + (subsDone === subs.length ? " all" : "") }, icon("checkbox", "tiny"), `${subsDone}/${subs.length}`) : "",
+      parent && !nested ? el("span", { class: "m-parent", dir: "auto" }, "↳ " + (parent.title || "")) : "",
       t.notes ? el("span", { class: "m-notes", title: t.notes }, icon("text", "tiny")) : "",
     ].filter(Boolean);
-    const li = el("li", { class: "task" + (t.done ? " done" : ""), "data-id": t.id },
+    const closed = this.ui.collapsed?.includes(t.id);
+    const li = el("li", { class: "task" + (t.done ? " done" : "") + (nested ? " sub" : ""), "data-id": t.id },
+      subs.length && !nested ? el("button", { class: "caret" + (closed ? " closed" : ""), title: closed ? "הצגת תתי המשימות" : "הסתרת תתי המשימות", onclick: e => { e.stopPropagation(); this.toggleSubs(t.id); } }, icon("chevD", "tiny")) : "",
       el("button", { class: "chk", style: { "--c": cvar(PRI[t.priority] || "beige") }, title: t.done ? "החזרה" : "סיום", onclick: e => { e.stopPropagation(); this.toggle(t, li); } }, icon("check")),
       el("div", { class: "t-main" },
         el("div", { class: "t-title", dir: "auto" }, t.title || "(ללא שם)"),
@@ -312,7 +381,7 @@ const Tasks = {
     return li;
   },
   onRowDown(e, t, li, g) {
-    if (e.button !== 0 || e.target.closest(".chk")) return;
+    if (e.button !== 0 || e.target.closest(".chk, .caret")) return;
     if (e.pointerType === "touch") { dragTrack(e, { threshold: 8, end: moved => { if (!moved) this.openTask(t); } }); return; }
     let target = null;
     dragTrack(e, {
@@ -335,7 +404,10 @@ const Tasks = {
   },
   dropInto(t, from, to) {
     if (!to) return this.render();
-    if (to.drop) return DB.patch("tasks", t.id, to.drop);
+    if (to.drop) {
+      if ("project_id" in to.drop) for (const s of this.subtasks(t.id)) DB.patch("tasks", s.id, { project_id: to.drop.project_id }, { silent: true });
+      return DB.patch("tasks", t.id, { ...to.drop, ...("project_id" in to.drop ? { parent_id: null } : {}) });
+    }
     if (to.key.startsWith("t:")) {
       const tags = new Set(t.tags || []);
       if (from?.tag) tags.delete(from.tag);
@@ -371,10 +443,14 @@ const Tasks = {
       if (e.target.value === "__new") {
         const name = await UI.prompt({ title: "פרויקט חדש" });
         if (name) { const p = this.ensureProject(name); set({ project_id: p.id }); fillProj(); } else fillProj();
-      } else set({ project_id: e.target.value || null });
+      } else {
+        const pid = e.target.value || null;
+        for (const s of this.subtasks(id)) DB.patch("tasks", s.id, { project_id: pid }, { silent: true });
+        set({ project_id: pid });
+      }
     } });
     const fillProj = () => {
-      proj.replaceChildren(el("option", { value: "" }, "תיבה (בלי פרויקט)"), ...this.projects().map(p => el("option", { value: p.id }, p.name)), el("option", { value: "__new" }, "+ פרויקט חדש…"));
+      proj.replaceChildren(el("option", { value: "" }, "תיבה (בלי פרויקט)"), ...this.projTree().map(({ p, depth }) => el("option", { value: p.id }, "\u00A0\u00A0\u00A0".repeat(depth) + (depth ? "↳ " : "") + p.name)), el("option", { value: "__new" }, "+ פרויקט חדש…"));
       proj.value = cur().project_id || "";
     };
     fillProj();
@@ -395,24 +471,65 @@ const Tasks = {
     tagIn.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === ",") && !e.isComposing) { e.preventDefault(); addTag(); } });
     tagIn.addEventListener("change", () => { if (this.tagList().includes(tagIn.value.trim())) addTag(); });
     drawTags();
+    /* subtasks */
+    const subWrap = el("div", { class: "subs" });
+    const drawSubs = () => {
+      const addIn = el("input", { class: "inp sub-add", placeholder: "תת-משימה חדשה ואז Enter", dir: "auto", autocomplete: "off" });
+      addIn.addEventListener("keydown", e => {
+        if (e.key !== "Enter" || e.isComposing) return;
+        e.preventDefault();
+        const v = addIn.value.trim();
+        if (!v) return;
+        const p = parseQuick(v);
+        p.tags.forEach(n => this.ensureTag(n));
+        DB.create("tasks", { title: p.title || v, parent_id: id, project_id: cur().project_id, tags: p.tags, due_date: p.due, due_time: p.time, priority: p.priority ?? 4, sort: Date.now() });
+        drawSubs();
+        $(".sub-add", subWrap)?.focus();
+      });
+      subWrap.replaceChildren(...this.subtasks(id).map(s => {
+        const ti = el("input", { class: "sub-title", value: s.title, dir: "auto" });
+        ti.addEventListener("input", debounce(() => DB.patch("tasks", s.id, { title: ti.value.trim() }), 300));
+        return el("div", { class: "sub-row" + (s.done ? " done" : "") },
+          el("input", { type: "checkbox", class: "cbox", checked: s.done, onchange: e => { DB.patch("tasks", s.id, { done: e.target.checked, done_at: e.target.checked ? new Date().toISOString() : null }); drawSubs(); } }),
+          ti,
+          s.due_date ? el("span", { class: "muted small" }, dayWord(fromKey(s.due_date))) : "",
+          el("button", { class: "icon-btn sm", title: "פרטים (תאריך, תגיות…)", onclick: () => { dlg.close(); setTimeout(() => this.openTask(s), 60); } }, icon("chevL")),
+          el("button", { class: "icon-btn sm", title: "מחיקה", onclick: () => { DB.remove("tasks", s.id); drawSubs(); } }, icon("x")));
+      }), addIn);
+    };
+    drawSubs();
+    const parentTask = t.parent_id && DB.get("tasks", t.parent_id);
     const doneBox = el("input", { type: "checkbox", class: "cbox", checked: t.done, onchange: e => set({ done: e.target.checked, done_at: e.target.checked ? new Date().toISOString() : null }) });
     const dlg = UI.dialog(el("div", { class: "editor" },
+      parentTask ? el("button", { class: "parent-link", dir: "auto", onclick: () => { dlg.close(); setTimeout(() => this.openTask(parentTask), 60); } }, "↳ חלק מ: ", el("b", {}, parentTask.title || "(ללא שם)")) : "",
       el("div", { class: "ed-top" }, el("label", { class: "inline big-check" }, doneBox), title, el("button", { class: "icon-btn", onclick: () => dlg.close() }, icon("x"))),
       el("div", { class: "ed-row" }, icon("calendar"), el("div", { class: "grow" }, el("div", { class: "when-line" }, date, time), quickDates)),
       el("div", { class: "ed-row" }, icon("flag"), priBox),
       el("div", { class: "ed-row" }, icon("folder"), proj),
       el("div", { class: "ed-row" }, icon("tag"), tagWrap),
+      el("div", { class: "ed-row" }, icon("checkbox"), el("div", { class: "grow" }, el("div", { class: "ed-label" }, "תתי משימות"), subWrap)),
       el("div", { class: "ed-row" }, icon("text"), notes),
       el("div", { class: "dlg-actions" },
-        el("button", { class: "btn ghost danger-text", onclick: () => { const row = cur(); DB.remove("tasks", id); dlg.close(); UI.toast("המשימה נמחקה", { label: "ביטול", fn: () => DB.put("tasks", { ...row, deleted: false }) }); } }, icon("trash"), "מחיקה"),
+        el("button", { class: "btn ghost danger-text", onclick: () => {
+          const rows = [cur(), ...this.subtasks(id)];
+          for (const r of rows.slice(1)) DB.remove("tasks", r.id, { silent: true });
+          DB.remove("tasks", id); dlg.close();
+          UI.toast(rows.length > 1 ? "המשימה ותתי המשימות נמחקו" : "המשימה נמחקה", { label: "ביטול", fn: () => rows.forEach(r => DB.put("tasks", { ...r, deleted: false })) });
+        } }, icon("trash"), "מחיקה"),
         el("span", { class: "grow muted small" }, t.created_at ? `נוצרה ${dayWord(new Date(t.created_at))}` : ""),
         el("button", { class: "btn", onclick: () => dlg.close() }, "סיום"))), "wide");
   },
 
   /* ---------- menus ---------- */
-  async addProject() {
-    const name = await UI.prompt({ title: "פרויקט חדש", placeholder: "למשל: דוד ילין, LevCatom, בית" });
-    if (name) { const p = this.ensureProject(name); this.select("p:" + p.id); }
+  async addProject(parentId = null) {
+    const parent = parentId && DB.get("projects", parentId);
+    const name = await UI.prompt(parent
+      ? { title: `תת-פרויקט בתוך "${parent.name}"`, placeholder: "למשל: שם הקורס" }
+      : { title: "פרויקט חדש", placeholder: "למשל: דוד ילין, LevCatom, בית" });
+    if (!name) return;
+    const p = DB.create("projects", { name, parent_id: parentId, color: parent ? parent.color : nextColor(DB.all("projects").map(p => p.color)), sort: Date.now() }, { silent: true });
+    if (parentId) this.ui.closedProj = (this.ui.closedProj || []).filter(x => x !== parentId);
+    this.select("p:" + p.id);
   },
   async addTag() {
     const name = await UI.prompt({ title: "תגית חדשה", placeholder: "למשל: דחוף, מחשבים, שיחה" });
@@ -421,16 +538,35 @@ const Tasks = {
   projectMenu(btn, p) {
     UI.menu(btn, [
       { swatches: COLORS, value: p.color, fn: color => DB.patch("projects", p.id, { color }) },
+      { label: "תת-פרויקט חדש", icon: "plus", fn: () => this.addProject(p.id) },
       { label: "שינוי שם", icon: "text", fn: async () => { const name = await UI.prompt({ title: "שם הפרויקט", value: p.name }); if (name) DB.patch("projects", p.id, { name }); } },
+      { label: "העברה לתוך פרויקט אחר", icon: "folder", fn: () => this.moveProject(p) },
       { sep: true },
-      { label: "מחיקת הפרויקט", icon: "trash", danger: true, fn: async () => {
-        const ts = DB.all("tasks").filter(t => t.project_id === p.id);
-        if (!(await UI.confirm({ title: `למחוק את "${p.name}"?`, text: ts.length ? `${ts.length} המשימות שבו יעברו לתיבה.` : "" }))) return;
-        for (const t of ts) DB.patch("tasks", t.id, { project_id: null }, { silent: true });
-        DB.remove("projects", p.id);
-        if (this.ui.base === "p:" + p.id) this.select("all");
-      } },
+      { label: "מחיקת הפרויקט", icon: "trash", danger: true, fn: () => this.deleteProject(p) },
     ]);
+  },
+  async moveProject(p) {
+    const banned = this.projDesc(p.id);
+    const value = await UI.choose({
+      title: `לאן להעביר את "${p.name}"?`,
+      options: [{ label: "לרמה הראשית (בלי פרויקט מעל)", value: "__root" },
+        ...this.projTree().filter(({ p: q }) => !banned.has(q.id) && q.id !== p.parent_id).map(({ p: q }) => ({ label: this.projPath(q.id), value: q.id }))],
+    });
+    if (!value) return;
+    DB.patch("projects", p.id, { parent_id: value === "__root" ? null : value });
+  },
+  async deleteProject(p) {
+    const kids = this.projKids(p.id);
+    const ts = DB.all("tasks").filter(t => t.project_id === p.id);
+    const up = p.parent_id && DB.get("projects", p.parent_id);
+    const where = up ? `ל"${up.name}"` : "לתיבה";
+    const parts = [ts.length ? `${ts.length} משימות יעברו ${where}.` : "", kids.length ? `${kids.length} תתי הפרויקטים יעלו רמה אחת ולא יימחקו.` : ""].filter(Boolean);
+    if (!(await UI.confirm({ title: `למחוק את "${p.name}"?`, text: parts.join(" ") }))) return;
+    for (const t of ts) DB.patch("tasks", t.id, { project_id: up ? up.id : null }, { silent: true });
+    for (const k of kids) DB.patch("projects", k.id, { parent_id: p.parent_id || null }, { silent: true });
+    DB.remove("projects", p.id);
+    if (this.ui.base === "p:" + p.id) this.select(up ? "p:" + up.id : "all");
+    UI.toast(`"${p.name}" נמחק`);
   },
   tagMenu(btn, name) {
     const row = this.tagRow(name);
