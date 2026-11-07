@@ -60,19 +60,24 @@ const Home = {
         el("a", { class: "more", href: "#calendar" }, "ליומן המלא ←")));
   },
   renderTasks() {
-    const t0 = todayKey();
-    const list = DB.all("tasks").filter(t => !t.done && t.due_date && t.due_date <= t0).sort(Tasks.sortFn("due"));
-    const inp = el("input", { class: "inp add-in", placeholder: "משימה להיום… (#תגית, @פרויקט, !1)", dir: "auto", autocomplete: "off" });
+    const t0 = todayKey(), t1 = dkey(addDays(new Date(), 1));
+    const open = DB.all("tasks").filter(t => !t.done && t.due_date && t.due_date <= t1).sort(Tasks.sortFn("due"));
+    /* a subtask is drawn under its parent when the parent is also listed */
+    const ids = new Set(open.map(t => t.id));
+    const top = open.filter(t => !t.parent_id || !ids.has(t.parent_id));
+    const today = top.filter(t => t.due_date <= t0), tomorrow = top.filter(t => t.due_date === t1);
+    const rows = list => list.flatMap(t => [Tasks.row(t), ...open.filter(s => s.parent_id === t.id).map(s => Tasks.row(s, null, { nested: true }))]);
+    const inp = el("input", { class: "inp add-in", placeholder: "משימה להיום… (או ״מחר״, #תגית, @פרויקט, !1)", dir: "auto", autocomplete: "off" });
     inp.addEventListener("keydown", e => {
       if (e.key !== "Enter" || e.isComposing) return;
       if (Tasks.quickAdd(inp.value, { due: t0 })) { inp.value = ""; this.renderTasks(); $(".home-tasks .add-in")?.focus(); }
     });
     this.tasks.replaceChildren(
-      el("header", {}, el("h2", { class: "c-coral" }, "מה היום?"), list.length ? el("span", { class: "cnt-pill" }, list.length) : "", el("a", { class: "more", href: "#tasks" }, "לכל המשימות ←")),
-      el("ul", { class: "tlist scroll" }, list.length ? list.map(t => {
-        const li = Tasks.row(t);
-        return li;
-      }) : el("li", { class: "state" }, "אין משימות להיום. יום נקי!")),
+      el("header", {}, el("h2", { class: "c-coral" }, "מה היום?"), today.length ? el("span", { class: "cnt-pill" }, today.length) : "", el("a", { class: "more", href: "#tasks" }, "לכל המשימות ←")),
+      el("div", { class: "scroll" },
+        el("ul", { class: "tlist" }, today.length ? rows(today) : el("li", { class: "state" }, "אין משימות להיום. יום נקי!")),
+        tomorrow.length ? el("h3", { class: "day-h" }, "מחר", el("span", { class: "cnt" }, tomorrow.length)) : "",
+        tomorrow.length ? el("ul", { class: "tlist tomorrow" }, rows(tomorrow)) : ""),
       el("footer", {}, inp));
   },
   renderNotes() {
