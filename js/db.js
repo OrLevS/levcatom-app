@@ -180,11 +180,18 @@ const DB = {
     for (const t of TABLES) this.data[t] = new Map();
     this.outbox = new Map();
   },
+  /* same id on every device, so two devices seeding at once write the same rows instead of duplicates */
+  async seedId(name) {
+    const h = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(this.user.id + ":" + name)))]
+      .map(b => b.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  },
   async seed() {
-    if (!this.all("calendars").length && this.lastPull) {
-      this.create("calendars", { name: "אישי", color: "teal", sort: 1 });
-      this.create("calendars", { name: "הוראה", color: "coral", sort: 2 });
-    }
+    if (this.all("calendars").length || !this.lastPull) return;
+    if (!this.local && localStorage.getItem("lc-seeded-" + this.user.id)) return;
+    this.create("calendars", { id: await this.seedId("cal-personal"), name: "אישי", color: "teal", sort: 1 });
+    this.create("calendars", { id: await this.seedId("cal-teaching"), name: "הוראה", color: "coral", sort: 2 });
+    localStorage.setItem("lc-seeded-" + this.user.id, "1");
   },
 };
 
