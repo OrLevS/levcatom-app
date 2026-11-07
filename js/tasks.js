@@ -170,6 +170,7 @@ const Tasks = {
     let list = DB.all("tasks").filter(t => (q ? true : this.inBase(t, base)));
     if (q) list = list.filter(t => (t.title + " " + t.notes + " " + (t.tags || []).join(" ")).toLowerCase().includes(q));
     if (base !== "done" && !o.showDone) list = list.filter(t => !t.done);
+    if (o.priFilter?.length) list = list.filter(t => o.priFilter.includes(t.priority));
     if (o.tagFilter?.length) list = list.filter(t => o.tagMode === "all" ? o.tagFilter.every(n => t.tags?.includes(n)) : o.tagFilter.some(n => t.tags?.includes(n)));
     list.sort(base === "done" ? this.sortFn("doneAt") : this.sortFn(o.sortBy));
     /* subtasks whose parent is listed are drawn under the parent instead */
@@ -326,8 +327,15 @@ const Tasks = {
         this.ui.base !== "done" ? pick("מיון:", o.sortBy, SORTS, "sortBy") : "",
         this.ui.base !== "done" ? el("button", { class: "tb" + (o.showDone ? " on" : ""), onclick: () => this.setOpt("showDone", !o.showDone) }, icon("check", "tiny"), "גם שהושלמו") : "",
         el("button", { class: "tb", onclick: () => this.saveView() }, icon("save", "tiny"), this.ui.view ? "עדכון התצוגה" : "שמירה כתצוגה")),
+      el("div", { class: "tagbar" },
+        el("span", { class: "muted" }, "עדיפות:"),
+        [1, 2, 3, 4].map(p => el("button", {
+          class: "tagchip" + (o.priFilter?.includes(p) ? " on" : ""), style: { "--c": cvar(PRI[p] || "navy") },
+          onclick: () => { const s = new Set(o.priFilter || []); s.has(p) ? s.delete(p) : s.add(p); this.setOpt("priFilter", [...s]); },
+        }, icon("flag", "tiny"), PRI_LABEL[p])),
+        o.priFilter?.length ? el("button", { class: "tb", onclick: () => this.setOpt("priFilter", []) }, icon("x", "tiny"), "ניקוי") : ""),
       tags.length ? el("div", { class: "tagbar" },
-        el("span", { class: "muted" }, "סינון:"),
+        el("span", { class: "muted" }, "תגיות:"),
         tags.map(n => el("button", {
           class: "tagchip" + (o.tagFilter?.includes(n) ? " on" : ""), style: { "--c": cvar(this.tagColor(n)) }, dir: "auto",
           onclick: () => { const s = new Set(o.tagFilter || []); s.has(n) ? s.delete(n) : s.add(n); this.setOpt("tagFilter", [...s]); },

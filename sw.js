@@ -1,6 +1,6 @@
 /* App shell cache: the app opens instantly and works offline.
    Data goes straight to Supabase (never cached here). Bump VERSION on every deploy. */
-const VERSION = "lc-v4";
+const VERSION = "lc-v5";
 const SHELL = ["./", "index.html", "app.css", "paper.jpg", "manifest.webmanifest",
   "vendor/supabase.js", "js/util.js", "js/db.js", "js/calendar.js", "js/tasks.js", "js/notes.js", "js/home.js", "js/main.js",
   "fonts/SKFPogo-Regular.otf", "fonts/SKFMush-Light.otf", "icons/icon48.png", "icons/icon128.png", "icons/icon192.png"];
